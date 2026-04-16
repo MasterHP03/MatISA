@@ -78,8 +78,11 @@ class Emulator:
                     if self.reg[rs1] == self.reg[rs2]:
                         line_incr = off
                 elif op_code == 0x73: # ecall
-                    if self.reg[reg_map["a7"]] == 1:
+                    comm_code = self.reg[reg_map["a7"]]
+                    if comm_code == 1: # input int
                         print(self.reg[reg_map["a0"]])
+                    elif comm_code == 93: # sys_exit
+                        break
 
                 self.reg[0] = 0
                 curr_line += line_incr
