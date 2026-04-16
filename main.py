@@ -1,7 +1,10 @@
-import core.assembler as asm
-import core.emulator as emul
+from core.assembler import Assembler
+from core.emulator import Emulator
 
-enc_prog = asm.encode("code.txt")
-print()
-print("[Log]")
-emul.decode(enc_prog)
+asm = Assembler()
+machine_code = asm.encode("code.txt")
+
+if machine_code:
+    print("\n[Log]")
+    emul = Emulator()
+    emul.decode(machine_code)
