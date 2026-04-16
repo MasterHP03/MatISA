@@ -14,7 +14,7 @@ def check_jump(line_n, next_line):
 
 class Emulator:
     def __init__(self):
-        self.regs = [0] * reg_n
+        self.reg = [0] * reg_n
         self.mem = [0] * mem_size
 
     def decode(self, encoded):
@@ -36,42 +36,52 @@ class Emulator:
                 imm_u = (imm_i << 8) | (rs1 << 3) | func3
 
                 line_incr = 1
-                if op_code == 0x33: # add
-                    self.regs[rd] = self.regs[rs1] + self.regs[rs2]
+                if op_code == 0x33:
+                    if func3 == 0x0: # add
+                        self.reg[rd] = self.reg[rs1] + self.reg[rs2]
+                    elif func3 == 0x1: # sll
+                        self.reg[rd] = (self.reg[rs1] << (self.reg[rs2] & 0x1F)) & 0xFFFFFFFF
+                    elif func3 == 0x5: # srl
+                        # Mask to avoid Python's arbitrary-precision when shifting negative value
+                        self.reg[rd] = (self.reg[rs1] & 0xFFFFFFFF) >> (self.reg[rs2] & 0x1F)
+                    elif func3 == 0x6: # or
+                        self.reg[rd] = self.reg[rs1] | self.reg[rs2]
+                    elif func3 == 0x7: # and
+                        self.reg[rd] = self.reg[rs1] & self.reg[rs2]
                 elif op_code == 0x13: # addi
                     imm = to_signed(imm_i, imm_short)
-                    self.regs[rd] = self.regs[rs1] + imm
+                    self.reg[rd] = self.reg[rs1] + imm
                 elif op_code == 0x03: # lw
                     off = to_signed(imm_i, imm_short)
-                    addr = self.regs[rs1] + off
+                    addr = self.reg[rs1] + off
                     check_mem_addr(addr)
-                    self.regs[rd] = self.mem[addr]
+                    self.reg[rd] = self.mem[addr]
                 elif op_code == 0x23: # sw
                     off = to_signed(imm_s, imm_short)
-                    addr = self.regs[rs1] + off
+                    addr = self.reg[rs1] + off
                     check_mem_addr(addr)
-                    self.mem[addr] = self.regs[rs2]
+                    self.mem[addr] = self.reg[rs2]
                 elif op_code == 0x6F: # jal
                     off = to_signed(imm_u, imm_long)
                     check_jump(len(encoded), curr_line + off)
-                    self.regs[rd] = curr_line + line_incr
+                    self.reg[rd] = curr_line + line_incr
                     line_incr = off
                 elif op_code == 0x67: # jalr
                     imm = to_signed(imm_i, imm_short)
-                    next_line = self.regs[rs1] + imm
+                    next_line = self.reg[rs1] + imm
                     check_jump(len(encoded), next_line)
-                    self.regs[rd] = curr_line + line_incr
+                    self.reg[rd] = curr_line + line_incr
                     line_incr = next_line - curr_line
                 elif op_code == 0x63: # beq
                     off = to_signed(imm_s, imm_short)
                     check_jump(len(encoded), curr_line + off)
-                    if self.regs[rs1] == self.regs[rs2]:
+                    if self.reg[rs1] == self.reg[rs2]:
                         line_incr = off
                 elif op_code == 0x73: # ecall
-                    if self.regs[reg_map["a7"]] == 1:
-                        print(self.regs[reg_map["a0"]])
+                    if self.reg[reg_map["a7"]] == 1:
+                        print(self.reg[reg_map["a0"]])
 
-                self.regs[0] = 0
+                self.reg[0] = 0
                 curr_line += line_incr
             except ISAError as e:
                 print(f"Line {curr_line}: {e}")
