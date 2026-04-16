@@ -220,6 +220,12 @@ def decode(encoded):
                 check_jump(len(encoded), curr_line + off)
                 regs[dest] = curr_line + line_incr
                 line_incr = off
+            elif op_code == 0x21: # jalr
+                imm = to_signed(src2, 8)
+                next_line = regs[src1] + imm
+                check_jump(len(encoded), next_line)
+                regs[dest] = curr_line + line_incr
+                line_incr = next_line - curr_line
             elif op_code == 0x30: # beq
                 off = to_signed(dest, 8)
                 check_jump(len(encoded), curr_line + off)
