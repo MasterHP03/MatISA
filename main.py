@@ -1,18 +1,18 @@
 import re
 
 instructions = {
-    "add": (0x01, 'R'),
-    "addi": (0x02, 'I'),
-    "lw": (0x10, 'M'),
-    "sw": (0x18, 'M'),
-    "jal": (0x20, 'J'),
-    "jalr": (0x21, 'I'),
-    "beq": (0x30, 'B'),
-    "prt": (0xFF, 'U'),
+    "add": ('R', 0x33, 0, 0),
+    "addi": ('I', 0x13, 0, 0),
+    "lw": ('I', 0x03, 0b010, 0),
+    "sw": ('S', 0x23, 0b010, 0),
+    "jal": ('J', 0x6F, 0, 0),
+    "jalr": ('I', 0x67, 0, 0),
+    "beq": ('B', 0x63, 0, 0),
+    "ecall": ('I', 0x73, 0, 0),
 }
 
-reg_num = 32
-regs = [0] * reg_num
+reg_n = 32
+regs = [0] * reg_n
 reg_map = {
     "zero": 0,
     "ra": 1,
@@ -42,6 +42,9 @@ mem = [0] * mem_size
 
 symbol_table: dict[str, int] = {}
 
+imm_short = 12  # I, S, B
+imm_long = 20  # U, J
+
 
 class ISAError(Exception):
     pass
@@ -70,7 +73,7 @@ def get_reg_id(reg_name):
         if reg_name.startswith('x') and len(reg_name) > 1:
             try:
                 reg_id = int(reg_name[1:])
-                if 0 <= reg_id < reg_num:
+                if 0 <= reg_id < reg_n:
                     return reg_id
             except ValueError:
                 pass # to below
@@ -91,7 +94,7 @@ def parse_mem(arg):
     if not match:
         raise ISAError(f"Invalid memory argument format: {arg}")
 
-    offset = get_imm(match.group(1), 8)
+    offset = get_imm(match.group(1), imm_short)
     base_reg = get_reg_id(match.group(2))
 
     return offset, base_reg
@@ -154,44 +157,66 @@ def encode():
                 continue
 
             cmd = args[0]
-            dest = 0
-            src1 = 0
-            src2 = 0
-
-            op_code, inst_type = get_inst_info(cmd)
-            if inst_type == 'R':
+            inst_type, op_code, func3, func7 = get_inst_info(cmd)
+            rd = 0
+            rs1 = 0
+            rs2 = 0
+            if cmd == 'ecall':
+                pass
+            elif inst_type == 'R':
                 need_args(args, 3)
-                dest = get_reg_id(args[1])
-                src1 = get_reg_id(args[2])
-                src2 = get_reg_id(args[3])
+                rd = get_reg_id(args[1])
+                rs1 = get_reg_id(args[2])
+                rs2 = get_reg_id(args[3])
             elif inst_type == 'I':
-                need_args(args, 3)
-                dest = get_reg_id(args[1])
-                src1 = get_reg_id(args[2])
-                src2 = get_imm(args[3], 8)
-            elif inst_type == 'M':
                 need_args(args, 2)
-                dest = get_reg_id(args[1])
-                src2, src1 = parse_mem(args[2])
+                rd = get_reg_id(args[1])
+                try:
+                    offset, rs1 = parse_mem(args[2])
+                    imm = offset & 0xFFF
+                except ISAError:
+                    need_args(args, 3)
+                    rs1 = get_reg_id(args[2])
+                    imm = get_imm(args[3], 12)
+                rs2 = imm & 0b11111
+                func7 = imm >> 5
+            elif inst_type == 'S':
+                need_args(args, 2)
+                rs2 = get_reg_id(args[1])
+                offset, base_reg = parse_mem(args[2])
+                imm = offset & 0xFFF
+                rs1 = base_reg
+                rd = imm & 0x1F
+                func7 = (imm >> 5) & 0x7F
             elif inst_type == 'J':
                 need_args(args, 2)
-                dest = get_reg_id(args[1])
+                rd = get_reg_id(args[1])
                 imm = get_label_addr(args[2]) - curr_line
-                src1 = imm & 0xFF
-                src2 = imm >> 8
+                # Jump unit: line. No implicit tailing one
+                func3 = imm & 0x07
+                rs1 = (imm >> 3) & 0x1F
+                rs2 = (imm >> 8) & 0x1F
+                func7 = (imm >> 13) & 0x7F
             elif inst_type == 'B':
                 need_args(args, 3)
-                src1 = get_reg_id(args[1])
-                src2 = get_reg_id(args[2])
+                rs1 = get_reg_id(args[1])
+                rs2 = get_reg_id(args[2])
                 imm = get_label_addr(args[3]) - curr_line
-                dest = imm & 0xFF
+                # Jump unit: line. No implicit tailing one
+                rd = imm & 0x1F
+                func7 = (imm >> 5) & 0x7F
             elif inst_type == 'U':
-                need_args(args, 1)
-                dest = get_reg_id(args[1])
+                need_args(args, 2)
+                rd = get_reg_id(args[1])
+                imm = get_imm(args[2], 20)
+                func3 = imm & 0x07
+                rs1 = (imm >> 3) & 0x1F
+                rs2 = (imm >> 8) & 0x1F
+                func7 = imm >> 13
 
-            encoded = op_code | (dest << 8) | (src1 << 16) | (src2 << 24)
+            encoded = op_code | (rd << 7) | (func3 << 12) | (rs1 << 15) | (rs2 << 20) | (func7 << 25)
             insts.append(encoded)
-            # print(f"{curr_line} {len(insts)} {line} {inst_type} {encoded:08x} {op_code:08x} {dest:08x} {src1:08x} {src2:08x}")
+            # print(f"{curr_line} {len(insts)} {line} {inst_type} {encoded:08x} {func7:02x} {rs2:02x} {rs1:02x} {func3:01x} {rd:02x} {op_code:02x}")
             curr_line += 1
         except ISAError as e:
             print(f"Line {curr_line}: {e}")
@@ -207,48 +232,54 @@ def decode(encoded):
             if curr_line > len(encoded):
                 break
             line = encoded[curr_line - 1]
-            op_code = line & 0xFF
-            dest = (line >> 8) & 0xFF
-            src1 = (line >> 16) & 0xFF
-            src2 = (line >> 24) & 0xFF
-            # print(f"{curr_line} {line:08x} {op_code:08x} {dest:08x} {src1:08x} {src2:08x}")
+            op_code = line & 0x7F
+            rd = (line >> 7) & 0x1F
+            func3 = (line >> 12) & 0x07
+            rs1 = (line >> 15) & 0x1F
+            rs2 = (line >> 20) & 0x1F
+            func7 = (line >> 25) & 0x7F
+
+            imm_i = (func7 << 5) | rs2
+            imm_s = (func7 << 5) | rd
+            imm_u = (imm_i << 8) | (rs1 << 3) | func3
 
             line_incr = 1
             if False:
                 pass
-            elif op_code == 0xFF: # prt
-                print(regs[dest])
-            elif op_code == 0x01: # add
-                regs[dest] = regs[src1] + regs[src2]
-            elif op_code == 0x02: # addi
-                imm = to_signed(src2, 8)
-                regs[dest] = regs[src1] + imm
-            elif op_code == 0x10: # lw
-                off = to_signed(src2, 8)
-                addr = regs[src1] + off
+            elif op_code == 0x33: # add
+                regs[rd] = regs[rs1] + regs[rs2]
+            elif op_code == 0x13: # addi
+                imm = to_signed(imm_i, imm_short)
+                regs[rd] = regs[rs1] + imm
+            elif op_code == 0x03: # lw
+                off = to_signed(imm_i, imm_short)
+                addr = regs[rs1] + off
                 check_mem_addr(addr)
-                regs[dest] = mem[addr]
-            elif op_code == 0x18: # sw
-                off = to_signed(src2, 8)
-                addr = regs[src1] + off
+                regs[rd] = mem[addr]
+            elif op_code == 0x23: # sw
+                off = to_signed(imm_s, imm_short)
+                addr = regs[rs1] + off
                 check_mem_addr(addr)
-                mem[addr] = regs[dest]
-            elif op_code == 0x20: # jal
-                off = to_signed((src2 << 8) | src1, 16)
+                mem[addr] = regs[rs2]
+            elif op_code == 0x6F: # jal
+                off = to_signed(imm_u, imm_long)
                 check_jump(len(encoded), curr_line + off)
-                regs[dest] = curr_line + line_incr
+                regs[rd] = curr_line + line_incr
                 line_incr = off
-            elif op_code == 0x21: # jalr
-                imm = to_signed(src2, 8)
-                next_line = regs[src1] + imm
+            elif op_code == 0x67: # jalr
+                imm = to_signed(imm_i, imm_short)
+                next_line = regs[rs1] + imm
                 check_jump(len(encoded), next_line)
-                regs[dest] = curr_line + line_incr
+                regs[rd] = curr_line + line_incr
                 line_incr = next_line - curr_line
-            elif op_code == 0x30: # beq
-                off = to_signed(dest, 8)
+            elif op_code == 0x63: # beq
+                off = to_signed(imm_s, imm_short)
                 check_jump(len(encoded), curr_line + off)
-                if regs[src1] == regs[src2]:
+                if regs[rs1] == regs[rs2]:
                     line_incr = off
+            elif op_code == 0x73: # ecall
+                if regs[reg_map["a7"]] == 1:
+                    print(regs[reg_map["a0"]])
 
             regs[0] = 0
             curr_line += line_incr
